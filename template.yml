@@ -1,0 +1,8 @@
+name: workflows
+description: Default local workflows for the workspace and base configuration for Dagu
+
+messages:
+  before-apply: |
+    Applying local workflows...
+  after-apply: |
+    Local workflows are ready.
