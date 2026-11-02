@@ -1,9 +1,9 @@
 <local-workflows-context path="/workflows/local">
-This folder is a checkout of the `{{workspace}}` branch of the `workflows` repository.
+This folder is a checkout of the `workspace/{{workspace}}` branch of the `workflows` repository.
 
 It stores the workflow dags, scripts, tests, and documentation (wiki) for workflows that run on the local workspace.
 
-To suggest/request changes, create a worktree branch from `{{workspace}}` and submit a GitPR. Perform the standard review cycle, and then once approved merge the changes into `{{workspace}}` so it can be put into use.
+To suggest/request changes, create a worktree branch from `workspace/{{workspace}}` and submit a GitPR. Perform the standard review cycle, and then once approved merge the changes into `workspace/{{workspace}}` so it can be put into use.
 
 If a dag, script, or pattern would be useful to other workspaces, it belongs in `main` instead: follow `../main/AGENTS.md` and submit a PR against `main`.
 

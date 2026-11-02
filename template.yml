@@ -1,6 +1,14 @@
 name: workflows
 description: Default local workflows for the workspace and base configuration for Dagu
 
+interview:
+  # Not toha_target_name: the render's target folder is always `local`
+  - id: workspace
+    type: text
+    prompt: Workspace slug
+    description: The workspace this branch belongs to
+    required: true
+
 messages:
   before-apply: |
     Applying local workflows...
