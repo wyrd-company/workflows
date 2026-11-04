@@ -1,0 +1,44 @@
+{
+  "$schema": "https://wyrd.foo/toha/schemas/applied-record/1",
+  "applications": [
+    {
+      "answers": {
+        "workspace": "truename"
+      },
+      "commit": null,
+      "context": {},
+      "generated": "2026-11-04T06:17:47.772931846+00:00[Etc/UTC]",
+      "parts": [],
+      "paths": {
+        "AGENTS.md": {
+          "blob": "6efd682c07e77e37e1b1c04a95e98b3fd7dc3c88",
+          "mode": "100644",
+          "origin": "toha"
+        },
+        "bin/AGENTS.md": {
+          "blob": "22eea25f2fb5dc9fbdf6f0082e252b11853a0be0",
+          "mode": "100644",
+          "origin": "toha"
+        },
+        "dags/AGENTS.md": {
+          "blob": "a80987b229a8b5625d85bb6a4e7251dffaf205d8",
+          "mode": "100644",
+          "origin": "toha"
+        },
+        "tests/AGENTS.md": {
+          "blob": "5dc64c25184ffca1a44a7e048ab12fb6a0b1eaae",
+          "mode": "100644",
+          "origin": "toha"
+        },
+        "wiki/AGENTS.md": {
+          "blob": "32ba317d302bebb3b3827fbe045b8d57e562d72d",
+          "mode": "100644",
+          "origin": "toha"
+        }
+      },
+      "source": "/workflows/main",
+      "target": ".",
+      "template": "/workflows/main"
+    }
+  ]
+}
