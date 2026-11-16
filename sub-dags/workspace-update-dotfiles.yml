@@ -1,0 +1,60 @@
+# Pulls and applies the workspace dotfiles after a push to the main branch of
+# workspace-dotfiles or skills.
+#
+# Trowel enqueues it for every push to wyrd-company/workspace-dotfiles and
+# wyrd-company/skills (see workspace-ansible's templates/etc/trowel/config.yml.j2),
+# with the push's ref and head commit as REF and SHA. Push subjects carry no
+# branch, so the step's precondition skips pushes to any other branch.
+#
+# `chezmoi update` pulls the dotfiles and applies them. Every apply runs the
+# dotfiles' run_after_update-skills.sh, which fast-forwards the skills clone
+# (~/.agents/skills) when it is a clean checkout of main, so a skills push needs
+# nothing more.
+description: Pull and apply the dotfiles (chezmoi update) after a push to main of workspace-dotfiles or skills
+
+# Shared with workspace-update-ansible, so the two never run at once.
+queue: workspace-update
+# Queue every push: "latest" could drop a queued push to main for a later push to
+# another branch, which the precondition then skips.
+overlap_policy: all
+
+params:
+  - REF: refs/heads/main
+  - SHA: ""
+
+timeout_sec: 900
+
+env:
+  # Dagu gives steps only the variables it sets, so pass on what the dotfiles'
+  # templates and run_ scripts need, as workspace-ansible's container.yml does:
+  # chezmoi's vault function runs bao against the Wyrwood socket, and the npm
+  # packages install under the container's prefix.
+  - BAO_ADDR: ${BAO_ADDR}
+  - NPM_CONFIG_PREFIX: ${NPM_CONFIG_PREFIX}
+  # run_after_gh-extensions.sh calls the gh shim outside a repository, where it
+  # cannot take the owner from a remote (as in workspace-ansible's container.yml)
+  - GH_OWNER: wyrd-company
+
+steps:
+  - name: chezmoi-update
+    # On the step, not the DAG: a DAG-level miss marks the run aborted
+    preconditions:
+      - condition: "${REF}"
+        expected: "refs/heads/main"
+    working_dir: /home/vscode
+    # chezmoi update pulls with --rebase. Only update a clean checkout of main, so
+    # a branch or uncommitted work in the source directory is never rebased; fail
+    # instead, so the skipped update shows.
+    script: |
+      set -eu
+      src=$(chezmoi source-path)
+      branch=$(git -C "$src" symbolic-ref --quiet --short HEAD || true)
+      if [ "$branch" != main ]; then
+        echo "workspace-update-dotfiles: $src is on '${branch:-a detached head}', not main; not updating" >&2
+        exit 1
+      fi
+      if [ -n "$(git -C "$src" status --porcelain)" ]; then
+        echo "workspace-update-dotfiles: $src has uncommitted changes; not updating" >&2
+        exit 1
+      fi
+      chezmoi update --init

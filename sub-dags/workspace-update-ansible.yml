@@ -1,0 +1,31 @@
+# Reapplies the workspace-ansible playbook after a push to its main branch.
+#
+# Trowel enqueues it for every push to wyrd-company/workspace-ansible (see
+# workspace-ansible's templates/etc/trowel/config.yml.j2), with the push's ref
+# and head commit as REF and SHA. Push subjects carry no branch, so the
+# precondition skips pushes to any other branch. Run it from the UI or with
+# `dagu enqueue -c /etc/dagu/config.yml workspace-update-ansible` to reapply by hand.
+description: Reapply workspace-ansible (sudo ansible-sync) after a push to its main branch
+
+# Shared with workspace-update-dotfiles, so the two never run at once: ansible-sync
+# also applies the dotfiles. A queue no config defines runs one run at a time.
+queue: workspace-update
+# Queue every push: "latest" could drop a queued push to main for a later push to
+# another branch, which the precondition then skips.
+overlap_policy: all
+
+params:
+  - REF: refs/heads/main
+  - SHA: ""
+
+# ansible-sync reruns the whole playbook
+timeout_sec: 1800
+
+steps:
+  - name: ansible-sync
+    # On the step, not the DAG: a DAG-level miss marks the run aborted
+    preconditions:
+      - condition: "${REF}"
+        expected: "refs/heads/main"
+    # sudoers allows ansible-sync with no arguments, without a password
+    run: sudo -n /usr/local/bin/ansible-sync
