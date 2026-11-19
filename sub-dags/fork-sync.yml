@@ -1,0 +1,44 @@
+# Brings a fork's main up to date with its upstream's main after a push upstream.
+#
+# On a workspace that runs on forks (upstream_org set), Trowel enqueues it for
+# every push to an upstream workspace repository (see workspace-ansible's
+# templates/etc/trowel/config.yml.j2), with UPSTREAM and FORK as owner/repo and
+# the push's ref and head commit as REF and SHA. Push subjects carry no branch,
+# so the step's precondition skips pushes to any other branch.
+#
+# fork-sync-run compares the two mains through the GitHub API. A fork with no
+# commits of its own is fast-forwarded on the server (merge-upstream). A fork
+# with its own commits is rebased onto upstream in a cached clone under
+# /repos/fork-sync, after a backup tag, and force-pushed with a lease. A conflict
+# opens an issue on the fork, notifies ntfy and fails the run. The README's
+# "Fork sync" section has the details and the reasoning.
+#
+# By hand: dagu enqueue -c /etc/dagu/config.yml fork-sync -- \
+#   UPSTREAM=wyrd-company/workflows FORK=boblangley/workflows
+description: Sync a fork's main from its upstream's main after a push upstream (fast-forward or rebase)
+
+# Its own queue, not workspace-update: the sync's push to the fork triggers the
+# fork's own workspace-update-* DAG, which must not wait behind this run or the
+# next sync. A queue no config defines runs one run at a time, so syncs never
+# overlap; fork-sync-run also locks the fork's cache for runs started outside
+# the queue.
+queue: fork-sync
+# Queue every push: "latest" could drop a queued push to main for a later push to
+# another branch, which the precondition then skips.
+overlap_policy: all
+
+params:
+  - UPSTREAM: ""
+  - FORK: ""
+  - REF: refs/heads/main
+  - SHA: ""
+
+timeout_sec: 900
+
+steps:
+  - name: sync
+    # On the step, not the DAG: a DAG-level miss marks the run aborted
+    preconditions:
+      - condition: "${REF}"
+        expected: "refs/heads/main"
+    run: fork-sync-run "${UPSTREAM}" "${FORK}" "${SHA}"

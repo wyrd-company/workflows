@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Syncs FORK's main from UPSTREAM's main. Called by sub-dags/fork-sync.yml.
+#
+# Usage: fork-sync-run UPSTREAM FORK [SHA]
+#   UPSTREAM, FORK  owner/repo. SHA, the upstream push's head, is only logged.
+#
+# 1. Compares UPSTREAM:main with FORK:main through the GitHub API. Not behind: done.
+# 2. The fork has no commits of its own: POST merge-upstream fast-forwards it on
+#    the server.
+# 3. Otherwise fork-sync-rebase rebases the fork's commits onto upstream in a
+#    cached clone and force-pushes with a lease.
+# Every success closes an open conflict issue (fork-sync-resolve).
+#
+# Exit status: 0 synced or nothing to do, 2 rebase conflict (alerted by
+# fork-sync-alert), 3 the fork moved during the sync (lease failed; a rerun or
+# the next upstream push retries), 1 anything else.
+set -euo pipefail
+
+usage() { echo "usage: fork-sync-run UPSTREAM FORK [SHA]" >&2; exit 1; }
+[ $# -ge 2 ] && [ $# -le 3 ] || usage
+upstream=$1 fork=$2 sha=${3:-}
+repo_re='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+[[ $upstream =~ $repo_re ]] || { echo "fork-sync: UPSTREAM '$upstream' is not owner/repo" >&2; exit 1; }
+[[ $fork =~ $repo_re ]] || { echo "fork-sync: FORK '$fork' is not owner/repo" >&2; exit 1; }
+[ "$upstream" != "$fork" ] || { echo "fork-sync: UPSTREAM and FORK are both $fork" >&2; exit 1; }
+
+# gh api has no --repo: GH_REPO tells the gh shim which owner to mint a token for
+export GH_REPO=$fork
+branch=main
+
+echo "fork-sync: $fork from $upstream${sha:+ (upstream push $sha)}"
+
+# Base is upstream's main, head the fork's: behind_by counts upstream commits the
+# fork lacks, ahead_by the fork's own commits, merges from "Sync fork" included.
+compare=$(gh api "repos/$fork/compare/${upstream%%/*}:$branch...$branch" \
+    --jq '{behind_by, ahead_by, upstream: .base_commit.sha} | @json')
+behind=$(jq -r .behind_by <<<"$compare")
+ahead=$(jq -r .ahead_by <<<"$compare")
+upstream_head=$(jq -r .upstream <<<"$compare")
+echo "fork-sync: $fork is $behind behind and $ahead ahead of $upstream ($upstream_head)"
+
+if [ "$behind" -eq 0 ]; then
+    echo "fork-sync: not behind; nothing to do"
+    fork-sync-resolve "$fork" "$upstream_head"
+    exit 0
+fi
+
+if [ "$ahead" -eq 0 ]; then
+    # Fast-forwards on the server: no clone, no force-push
+    merge_type=$(gh api -X POST "repos/$fork/merge-upstream" -f branch="$branch" --jq .merge_type)
+    echo "fork-sync: merge-upstream: $merge_type"
+    if [ "$merge_type" = merge ]; then
+        # A fork commit landed after the compare. The next sync rebases it and
+        # drops this merge commit.
+        echo "fork-sync: the fork gained a commit during the sync; GitHub merged instead of fast-forwarding" >&2
+    fi
+    fork-sync-resolve "$fork" "$upstream_head"
+    exit 0
+fi
+
+fork-sync-rebase "$upstream" "$fork"

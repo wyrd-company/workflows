@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Reports a fork-sync rebase conflict: an issue on the fork, labelled fork-sync,
+# and an ntfy notification. Called by fork-sync-rebase after it aborts the rebase.
+#
+# Usage: fork-sync-alert UPSTREAM FORK UPSTREAM_SHA FORK_SHA STOPPED REPLAYED CONFLICTS
+#   STOPPED    the commit the rebase stopped on ("<sha> <subject>")
+#   REPLAYED   the fork commits being replayed, one "<sha> <subject>" per line
+#   CONFLICTS  the conflicting files, one per line
+#
+# One open issue per fork. Each alert records its upstream and fork SHAs in a
+# marker comment; while the latest marker on the open issue matches, the
+# conflict was already reported and nothing is sent. A new upstream or fork
+# head comments on the open issue and notifies again.
+#
+# Forks have issues disabled unless someone enables them. Then the notification
+# carries the details instead, and reruns notify again.
+set -euo pipefail
+
+[ $# -eq 7 ] || { echo "usage: fork-sync-alert UPSTREAM FORK UPSTREAM_SHA FORK_SHA STOPPED REPLAYED CONFLICTS" >&2; exit 1; }
+upstream=$1 fork=$2 upstream_sha=$3 fork_sha=$4 stopped=$5 replayed=$6 conflicts=$7
+label=fork-sync
+marker="<!-- fork-sync: upstream=$upstream_sha fork=$fork_sha -->"
+
+body=$(mktemp)
+trap 'rm -f "$body"' EXIT
+{
+    echo "fork-sync could not rebase \`$fork\` main onto \`$upstream\` main."
+    echo
+    echo "- Upstream main: $upstream_sha"
+    echo "- Fork main: $fork_sha (unchanged; nothing was pushed)"
+    echo "- Stopped on: $stopped"
+    echo
+    echo "Fork commits being replayed:"
+    echo
+    sed 's/^/- /' <<<"$replayed"
+    echo
+    echo "Conflicting files:"
+    echo
+    sed 's/^/- `/; s/$/`/' <<<"$conflicts"
+    echo
+    echo "Resolve it by hand: rebase the fork's main onto upstream's main, fix the conflicts and"
+    echo "push with \`--force-with-lease\`. The next sync that succeeds closes this issue."
+    echo
+    echo "$marker"
+} >"$body"
+
+issue_url=""
+if issues=$(gh issue list --repo "$fork" --state open --label "$label" --json number,url --jq '.[0] // empty | @json' 2>&1); then
+    if [ -n "$issues" ]; then
+        number=$(jq -r .number <<<"$issues")
+        issue_url=$(jq -r .url <<<"$issues")
+        last=$(gh issue view "$number" --repo "$fork" --json body,comments \
+            --jq '[.body, .comments[].body] | map(select(contains("<!-- fork-sync: "))) | last // ""' \
+            | grep -o '<!-- fork-sync: [^>]*-->' | tail -n 1 || true)
+        if [ "$last" = "$marker" ]; then
+            echo "fork-sync: already reported in $issue_url; not alerting again"
+            exit 0
+        fi
+        gh issue comment "$number" --repo "$fork" --body-file "$body" >/dev/null
+        echo "fork-sync: commented on $issue_url"
+    else
+        gh label create "$label" --repo "$fork" --color D93F0B \
+            --description "fork-sync could not rebase main onto upstream" --force >/dev/null
+        issue_url=$(gh issue create --repo "$fork" --label "$label" \
+            --title "fork-sync: main conflicts with $upstream" --body-file "$body")
+        echo "fork-sync: opened $issue_url"
+    fi
+else
+    echo "fork-sync: cannot use issues on $fork (enable them in its settings): $issues" >&2
+fi
+
+if [ -z "${NTFY_TOPIC:-}" ]; then
+    echo "fork-sync: NTFY_TOPIC is not set; not notifying" >&2
+    exit 0
+fi
+message="Could not rebase $fork main onto $upstream ${upstream_sha:0:12}: conflicts in $(paste -sd, - <<<"$conflicts" | sed 's/,/, /g')."
+if [ -n "$issue_url" ]; then
+    ntfy pub --title "fork-sync conflict: $fork" --tags warning --click "$issue_url" \
+        "https://ntfy.sh/$NTFY_TOPIC" "$message" >/dev/null
+else
+    ntfy pub --title "fork-sync conflict: $fork" --tags warning \
+        "https://ntfy.sh/$NTFY_TOPIC" "$message Replaying: $(paste -sd';' - <<<"$replayed")" >/dev/null
+fi
+echo "fork-sync: notified ntfy"

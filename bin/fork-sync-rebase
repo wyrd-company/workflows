@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# Rebases FORK's own commits onto UPSTREAM's main and force-pushes them with a
+# lease. Called by fork-sync-run when the fork has commits of its own.
+#
+# Usage: fork-sync-rebase UPSTREAM FORK
+#
+# Works in a cached bare clone, $FORK_SYNC_CACHE/<owner>/<repo>.git (default
+# /repos/fork-sync, which survives restarts like the workspace's other bare
+# clones), with a throwaway worktree per run. Before the force-push it pushes a
+# backup tag, fork-sync/backup-<UTC timestamp>, of the fork head it rebased.
+#
+# Plain `git rebase` replays the fork's non-merge commits and drops merge
+# commits, such as those from GitHub's "Sync fork" button, and commits upstream
+# already has. The fork's main becomes upstream's main plus a linear patch stack.
+#
+# Exit status: 0 pushed, 2 conflict (aborted, alerted by fork-sync-alert, nothing
+# pushed), 3 the lease failed because someone pushed to the fork meanwhile, 1
+# anything else.
+#
+# FORK_SYNC_GIT_URL (default https://github.com) is the base of the remotes'
+# URLs; the tests point it at local bare repositories.
+set -euo pipefail
+
+[ $# -eq 2 ] || { echo "usage: fork-sync-rebase UPSTREAM FORK" >&2; exit 1; }
+upstream=$1 fork=$2
+branch=main
+git_url=${FORK_SYNC_GIT_URL:-https://github.com}
+cache=${FORK_SYNC_CACHE:-/repos/fork-sync}/$fork.git
+
+mkdir -p "$cache"
+# One sync per fork at a time, also for runs started outside the fork-sync queue
+exec 9>"$cache.lock"
+flock -w 600 9 || { echo "fork-sync: another sync holds $cache.lock" >&2; exit 1; }
+
+export GIT_DIR=$cache
+if [ ! -f "$cache/HEAD" ]; then
+    git init --quiet --bare "$cache"
+    echo "fork-sync: created the cache $cache"
+fi
+for remote in fork upstream; do
+    [ "$remote" = fork ] && url=$git_url/$fork.git || url=$git_url/$upstream.git
+    if git remote get-url "$remote" >/dev/null 2>&1; then
+        git remote set-url "$remote" "$url"
+    else
+        git remote add --no-tags "$remote" "$url"
+    fi
+    git config "remote.$remote.fetch" "+refs/heads/$branch:refs/remotes/$remote/$branch"
+done
+# A run that died leaves its worktree registered
+git worktree prune
+
+git fetch --quiet --no-tags fork
+git fetch --quiet --no-tags upstream
+fork_head=$(git rev-parse "refs/remotes/fork/$branch")
+upstream_head=$(git rev-parse "refs/remotes/upstream/$branch")
+echo "fork-sync: fork $fork_head, upstream $upstream_head"
+
+if git merge-base --is-ancestor "$upstream_head" "$fork_head"; then
+    echo "fork-sync: the fork already contains upstream; nothing to do"
+    fork-sync-resolve "$fork" "$upstream_head"
+    exit 0
+fi
+
+# The commits the rebase replays: the fork's non-merge commits upstream lacks
+replayed=$(git log --reverse --no-merges --cherry-pick --right-only --format='%h %s' \
+    "$upstream_head...$fork_head")
+
+work=$(mktemp -d)
+cleanup() {
+    git worktree remove --force "$work/tree" >/dev/null 2>&1 || true
+    rm -rf "$work"
+}
+trap cleanup EXIT
+git worktree add --quiet --detach "$work/tree" "$fork_head"
+unset GIT_DIR
+cd "$work/tree"
+
+if ! GIT_EDITOR=true git rebase --quiet "$upstream_head" >"$work/rebase.log" 2>&1; then
+    if ! [ -d "$(git rev-parse --git-path rebase-merge)" ] && ! [ -d "$(git rev-parse --git-path rebase-apply)" ]; then
+        cat "$work/rebase.log" >&2
+        echo "fork-sync: git rebase failed without stopping on a conflict" >&2
+        exit 1
+    fi
+    stopped=$(git log -1 --format='%h %s' REBASE_HEAD 2>/dev/null || echo unknown)
+    conflicts=$(git diff --name-only --diff-filter=U)
+    git rebase --abort
+    cat "$work/rebase.log" >&2
+    echo "fork-sync: conflict replaying $stopped onto $upstream_head in: $(echo $conflicts)" >&2
+    fork-sync-alert "$upstream" "$fork" "$upstream_head" "$fork_head" "$stopped" "$replayed" "$conflicts"
+    exit 2
+fi
+
+new_head=$(git rev-parse HEAD)
+echo "fork-sync: rebased onto $upstream_head:"
+git log --reverse --format='  %h %s' "$upstream_head..$new_head"
+
+# Backup first, so the force-push below can always be undone
+tag=fork-sync/backup-$(date -u +%Y%m%dT%H%M%SZ)
+while [ -n "$(git ls-remote --tags fork "refs/tags/$tag")" ]; do
+    # Two syncs within a second: never move an existing backup
+    sleep 1
+    tag=fork-sync/backup-$(date -u +%Y%m%dT%H%M%SZ)
+done
+git push --quiet fork "$fork_head:refs/tags/$tag"
+echo "fork-sync: backed up $fork_head as $tag"
+
+# The lease: only replace the fork head this run rebased
+if ! git push --quiet --force-with-lease="$branch:$fork_head" fork "$new_head:refs/heads/$branch" 2>"$work/push.log"; then
+    cat "$work/push.log" >&2
+    if grep -q 'stale info' "$work/push.log"; then
+        echo "fork-sync: $fork's $branch moved past $fork_head during the sync; not overwriting it." \
+            "A rerun or the next upstream push retries." >&2
+        exit 3
+    fi
+    exit 1
+fi
+echo "fork-sync: pushed $new_head to $fork $branch"
+fork-sync-resolve "$fork" "$upstream_head"

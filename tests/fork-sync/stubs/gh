@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# gh stand-in for tests/fork-sync/sync.sh: answers the calls fork-sync makes from
+# local bare repositories under FORK_SYNC_GIT_URL and an issues file under
+# STUB_STATE, and logs every call to $STUB_STATE/gh.log. STUB_ISSUES_DISABLED=1
+# makes issue calls fail as on a fork with issues disabled.
+set -euo pipefail
+state=${STUB_STATE:?}
+remotes=${FORK_SYNC_GIT_URL:?}
+issues=$state/issues.json
+[ -f "$issues" ] || echo '[]' >"$issues"
+printf 'gh %s\n' "$*" >>"$state/gh.log"
+
+# Pull out the options fork-sync uses; keep the rest positional
+jq_filter="." repo="" title="" body_file="" label="" comment="" fields=() pos=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --jq) jq_filter=$2; shift 2 ;;
+        --repo|-R) repo=$2; shift 2 ;;
+        --title) title=$2; shift 2 ;;
+        --body-file) body_file=$2; shift 2 ;;
+        --label) label=$2; shift 2 ;;
+        --comment) comment=$2; shift 2 ;;
+        -f) fields+=("$2"); shift 2 ;;
+        -X|--state|--json|--color|--description) shift 2 ;;
+        --force) shift ;;
+        *) pos+=("$1"); shift ;;
+    esac
+done
+out() { jq -r "$jq_filter"; }
+save() { local t; t=$(mktemp); jq "$@" "$issues" >"$t"; mv "$t" "$issues"; }
+issues_enabled() {
+    if [ "${STUB_ISSUES_DISABLED:-}" = 1 ]; then
+        echo "the '$repo' repository has disabled issues" >&2
+        exit 1
+    fi
+}
+
+case "${pos[0]} ${pos[1]:-}" in
+    "api "*/compare/*)
+        # repos/OWNER/REPO/compare/UOWNER:main...main
+        path=${pos[1]}; fork=${path#repos/}; fork=${fork%%/compare/*}
+        uowner=${path##*/compare/}; uowner=${uowner%%:*}
+        up_git=$remotes/$uowner/${fork#*/}.git
+        net=$(mktemp -d); trap 'rm -rf "$net"' EXIT
+        git init --quiet --bare "$net"
+        git --git-dir="$net" fetch --quiet "$remotes/$fork.git" +refs/heads/main:refs/f
+        git --git-dir="$net" fetch --quiet "$up_git" +refs/heads/main:refs/u
+        jq -n --argjson behind "$(git --git-dir="$net" rev-list --count refs/f..refs/u)" \
+            --argjson ahead "$(git --git-dir="$net" rev-list --count refs/u..refs/f)" \
+            --arg base "$(git --git-dir="$net" rev-parse refs/u)" \
+            '{behind_by: $behind, ahead_by: $ahead, base_commit: {sha: $base}}' | out
+        ;;
+    "api "*/merge-upstream)
+        path=${pos[1]}; fork=${path#repos/}; fork=${fork%/merge-upstream}
+        [ "${fields[*]}" = "branch=main" ] || { echo "stub gh: merge-upstream without branch=main" >&2; exit 1; }
+        parent=$(cat "$state/parent")
+        git --git-dir="$remotes/$fork.git" fetch --quiet "$remotes/$parent.git" refs/heads/main:refs/heads/main
+        echo '{"merge_type":"fast-forward"}' | out
+        ;;
+    "label create") ;;
+    "issue list")
+        issues_enabled
+        jq --arg l "$label" '[.[] | select(.state == "OPEN" and (.labels | index($l)))]' "$issues" | out
+        ;;
+    "issue view")
+        issues_enabled
+        jq --argjson n "${pos[2]}" '.[] | select(.number == $n)' "$issues" | out
+        ;;
+    "issue create")
+        issues_enabled
+        n=$(( $(jq length "$issues") + 1 ))
+        save --argjson n "$n" --arg t "$title" --arg l "$label" --rawfile b "$body_file" \
+            --arg u "https://github.com/$repo/issues/$n" \
+            '. + [{number: $n, url: $u, title: $t, state: "OPEN", labels: [$l], body: $b, comments: []}]'
+        echo "https://github.com/$repo/issues/$n"
+        ;;
+    "issue comment")
+        issues_enabled
+        save --argjson n "${pos[2]}" --rawfile b "$body_file" \
+            'map(if .number == $n then .comments += [{body: $b}] else . end)'
+        ;;
+    "issue close")
+        issues_enabled
+        save --argjson n "${pos[2]}" --arg c "$comment" \
+            'map(if .number == $n then .state = "CLOSED" | .comments += [{body: $c}] else . end)'
+        ;;
+    *) echo "stub gh: unexpected call: gh ${pos[*]}" >&2; exit 1 ;;
+esac

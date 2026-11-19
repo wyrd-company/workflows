@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# ntfy stand-in for tests/fork-sync/sync.sh: logs each call to $STUB_STATE/ntfy.log
+printf 'ntfy %s\n' "$*" >>"${STUB_STATE:?}/ntfy.log"

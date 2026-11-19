@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Closes the fork's open fork-sync conflict issue after a sync succeeds. Called by
+# fork-sync-run and fork-sync-rebase.
+#
+# Usage: fork-sync-resolve FORK UPSTREAM_SHA
+#
+# Never fails the sync: a fork with issues disabled has nothing to close.
+set -uo pipefail
+
+[ $# -eq 2 ] || { echo "usage: fork-sync-resolve FORK UPSTREAM_SHA" >&2; exit 1; }
+fork=$1 upstream_sha=$2
+
+if ! numbers=$(gh issue list --repo "$fork" --state open --label fork-sync --json number --jq '.[].number' 2>/dev/null); then
+    exit 0
+fi
+for number in $numbers; do
+    if gh issue close "$number" --repo "$fork" \
+        --comment "fork-sync: main is in sync with upstream $upstream_sha." >/dev/null; then
+        echo "fork-sync: closed issue #$number"
+    else
+        echo "fork-sync: could not close issue #$number" >&2
+    fi
+done
+exit 0
