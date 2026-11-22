@@ -13,17 +13,16 @@ from the setup thread and follows the client's documented review,
 merge, and publication process. It creates a checkout in the project's
 `worktrees/` folder from the client repository's bare clone.
 
-The most recent launch is recorded in
-`${XDG_STATE_HOME:-$HOME/.local/state}/dagu/t3code-stable-release-watch/last-launch.json`.
+The watcher keeps `config.json` and `last-launch.json` together in
+`~/.local/share/dagu/t3code-stable-release-watch/` on the workspace's persistent Dagu mount.
 If T3 accepted a launch before Dagu could save it, the next run looks up the
 release thread by title and starts a run there if needed. If work in a release
 thread fails after its run starts, resume that thread. Check Dagu run history
 for polling or dispatch errors. The next scheduled run retries the check.
 
-The watcher reads this workspace's setup from
-`${XDG_CONFIG_HOME:-$HOME/.config}/dagu/t3code-stable-release-watch.json`.
-Set `project_root` to the absolute T3 project path, `operator` to the assigned
-Git operator handle, and `operator_source` to a thread registered to that operator.
+In `config.json`, set `project_root` to the absolute T3 project path, `operator`
+to the assigned Git operator handle, and `operator_source` to a thread registered
+to that operator.
 
 Run the check on demand from the Dagu UI or with:
 

@@ -4,7 +4,6 @@
 
 import fcntl
 import json
-import os
 import re
 import subprocess
 import sys
@@ -141,9 +140,8 @@ def check(state_dir, project_root, operator, operator_source):
 
 if __name__ == "__main__":
     try:
-        config_home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
-        settings = json.loads((config_home / "dagu/t3code-stable-release-watch.json").read_text())
-        state_home = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
-        check(state_home / "dagu/t3code-stable-release-watch", **settings)
+        watch_dir = Path.home() / ".local/share/dagu/t3code-stable-release-watch"
+        settings = json.loads((watch_dir / "config.json").read_text())
+        check(watch_dir, **settings)
     except (OSError, ValueError, TypeError, KeyError, ElementTree.ParseError, subprocess.SubprocessError) as error:
         sys.exit(f"T3 Code release check failed: {error}")
