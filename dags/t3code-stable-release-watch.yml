@@ -1,0 +1,8 @@
+description: Start a t3code-client update and release thread for a new stable T3 Code release
+schedule: "*/15 * * * *"
+overlap_policy: skip
+timeout_sec: 120
+
+steps:
+  - name: check-and-launch
+    run: t3code-stable-release-watch-run.py
