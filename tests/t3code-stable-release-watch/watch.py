@@ -4,8 +4,8 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
-from urllib.error import HTTPError
+from unittest.mock import Mock, patch
+from urllib.error import HTTPError, URLError
 
 SCRIPT = Path(__file__).resolve().parents[2] / "bin/t3code-stable-release-watch-run.py"
 spec = importlib.util.spec_from_file_location("watch", SCRIPT)
@@ -33,7 +33,13 @@ class StableReleaseWatchTests(unittest.TestCase):
         self.manifest.parent.mkdir(parents=True)
         self.manifest.write_text(json.dumps({"devDependencies": {"t3": "0.1.10"}}))
         self.fetch = self.enterContext(patch.object(watch, "fetch"))
+        self.urlopen = self.enterContext(patch.object(watch, "urlopen"))
+        self.latest_url = self.urlopen.return_value.__enter__.return_value.geturl
+        self.set_latest_tag("v0.1.11")
         self.t3 = self.enterContext(patch.object(watch, "t3_json"))
+
+    def set_latest_tag(self, tag):
+        self.latest_url.return_value = f"{watch.UPSTREAM}/releases/tag/{tag}"
 
     def run_check(self):
         watch.check(self.state, self.project, "example", "setup-thread")
@@ -57,20 +63,41 @@ class StableReleaseWatchTests(unittest.TestCase):
             "tag": "v0.1.100", "threadId": "release-thread",
         })
 
-        self.fetch.side_effect = [entries, release("v0.1.100")]
+        self.fetch.side_effect = [entries]
         self.run_check()
         self.assertEqual(self.t3.call_count, 2)
 
-    def test_feed_without_new_stable_tag_uses_latest_release_endpoint(self):
-        self.fetch.side_effect = [feed("v0.1.11", "v0.1.12-nightly.1"), release("v0.1.12")]
+    def test_feed_without_new_stable_tag_uses_public_latest_redirect(self):
+        self.fetch.return_value = feed("v0.1.11", "v0.1.12-nightly.1")
+        self.set_latest_tag("v0.1.12")
         self.t3.side_effect = [[], {"threadId": "release-thread", "runId": "release-run"}]
         self.run_check()
-        self.assertEqual(self.fetch.call_args.args, (watch.LATEST,))
+        self.fetch.assert_called_once_with(f"{watch.UPSTREAM}/releases.atom")
+        request = self.urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, watch.LATEST_PAGE)
+        self.assertEqual(request.get_method(), "HEAD")
         self.assertIn("v0.1.12", self.t3.call_args.args[2])
+
+    def test_public_redirect_also_confirms_a_matching_atom_tag(self):
+        self.fetch.return_value = feed("v0.1.12")
+        self.set_latest_tag("v0.1.12")
+        self.assertEqual(watch.newest_release((0, 1, 11)), "v0.1.12")
+        self.fetch.assert_called_once_with(f"{watch.UPSTREAM}/releases.atom")
+
+    def test_latest_api_follows_an_unavailable_public_redirect(self):
+        calls = Mock()
+        calls.attach_mock(self.fetch, "fetch")
+        calls.attach_mock(self.urlopen, "urlopen")
+        self.fetch.side_effect = [feed("v0.1.11"), release("v0.1.12")]
+        self.urlopen.side_effect = URLError("latest page temporarily unavailable")
+
+        self.assertEqual(watch.newest_release((0, 1, 11)), "v0.1.12")
+        self.assertEqual([name for name, _, _ in calls.mock_calls], ["fetch", "urlopen", "fetch"])
+        self.assertEqual(self.fetch.call_args.args, (watch.LATEST_API,))
 
     def test_feed_tag_without_a_published_release_waits(self):
         self.fetch.side_effect = [
-            feed("v0.1.12"), HTTPError("", 404, "Not Found", {}, None), release("v0.1.11"),
+            feed("v0.1.12"), HTTPError("", 404, "Not Found", {}, None),
         ]
         self.run_check()
         self.t3.assert_not_called()
@@ -79,7 +106,7 @@ class StableReleaseWatchTests(unittest.TestCase):
         for target, tag in [("0.1.10", "v0.1.11"), ("0.1.13", "v0.1.13")]:
             with self.subTest(target=target, tag=tag):
                 self.manifest.write_text(json.dumps({"devDependencies": {"t3": target}}))
-                self.fetch.side_effect = [feed(tag), release(tag)]
+                self.fetch.side_effect = [feed(tag)]
                 self.run_check()
                 self.t3.assert_not_called()
                 self.assertFalse((self.state / "last-launch.json").exists())

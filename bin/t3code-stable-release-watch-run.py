@@ -14,7 +14,9 @@ from xml.etree import ElementTree
 
 UPSTREAM = "https://github.com/pingdotgg/t3code"
 RELEASES_API = "https://api.github.com/repos/pingdotgg/t3code/releases"
-LATEST = f"{RELEASES_API}/latest"
+LATEST_PAGE = f"{UPSTREAM}/releases/latest"
+LATEST_API = f"{RELEASES_API}/latest"
+USER_AGENT = "t3code-client-release-watch"
 INITIAL_BASELINE = "v0.1.11"  # This release already had its own update thread at setup.
 ATOM = {"atom": "http://www.w3.org/2005/Atom"}
 STABLE_TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
@@ -26,9 +28,19 @@ def stable_version(tag):
 
 
 def fetch(url):
-    request = Request(url, headers={"User-Agent": "t3code-client-release-watch"})
+    request = Request(url, headers={"User-Agent": USER_AGENT})
     with urlopen(request, timeout=20) as response:
         return response.read()
+
+
+def latest_web_release():
+    request = Request(LATEST_PAGE, method="HEAD", headers={"User-Agent": USER_AGENT})
+    try:
+        with urlopen(request, timeout=10) as response:
+            tag = response.geturl().removeprefix(f"{UPSTREAM}/releases/tag/")
+    except OSError:
+        return None
+    return tag if stable_version(tag) else None
 
 
 def published_release(tag):
@@ -49,15 +61,20 @@ def newest_release(floor):
         entry.findtext("atom:id", default="", namespaces=ATOM).split("/", 2)[-1]
         for entry in feed.findall("atom:entry", ATOM)
     ]
+
+    # Nightly and mobile builds can displace stable tags from the feed.
+    latest = latest_web_release()
+    if latest is None:
+        latest = json.loads(fetch(LATEST_API))["tag_name"]
+    latest_version = stable_version(latest) or ()
+
     candidates = [tag for tag in tags if (stable_version(tag) or ()) > floor]
     if candidates:
         tag = max(candidates, key=stable_version)
-        if published_release(tag):
+        if stable_version(tag) > latest_version and published_release(tag):
             return tag
 
-    # Nightly and mobile builds can displace all recent stable tags from the feed.
-    tag = json.loads(fetch(LATEST))["tag_name"]
-    return tag if (stable_version(tag) or ()) > floor else None
+    return latest if latest_version > floor else None
 
 
 def t3_json(*args, prompt=None):

@@ -1,9 +1,10 @@
 # T3 Code stable release watch
 
 Dagu checks the upstream GitHub releases Atom feed every 15 minutes for plain
-`vX.Y.Z` release tags and confirms the tag has a published GitHub release. When
-the feed has no newer published stable version, it checks GitHub's latest-release
-endpoint because nightly and mobile builds can fill the feed. The watcher only
+`vX.Y.Z` release tags. It follows GitHub's public `releases/latest` redirect to
+find the current stable release, even when nightly and mobile builds fill the
+feed. It calls GitHub's API if the redirect yields no stable tag or if the feed
+has a higher stable version that needs publication confirmed. The watcher only
 considers versions newer than v0.1.11, the target pinned in the local client
 `main/` checkout, and the last launch it recorded.
 
