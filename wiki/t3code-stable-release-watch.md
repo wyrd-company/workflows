@@ -27,5 +27,5 @@ to that operator.
 Run the check on demand from the Dagu UI or with:
 
 ```sh
-dagu start --config /etc/dagu/config.yml t3code-stable-release-watch
+dagu start --config /etc/dagu/config.yml /workflows/local/dags/t3code-stable-release-watch.yml
 ```
