@@ -1,10 +1,11 @@
 # T3 Code stable release watch
 
 Dagu checks the upstream GitHub releases Atom feed every 15 minutes for plain
-`vX.Y.Z` release tags. When the feed has no newer stable tag, it checks GitHub's
-latest-release endpoint because nightly and mobile builds can fill the feed.
-The watcher uses the newest eligible version. Its starting point is v0.1.11,
-which already had an update underway, or the client's target if that is newer.
+`vX.Y.Z` release tags and confirms the tag has a published GitHub release. When
+the feed has no newer published stable version, it checks GitHub's latest-release
+endpoint because nightly and mobile builds can fill the feed. The watcher only
+considers versions newer than v0.1.11, the target pinned in the local client
+`main/` checkout, and the last launch it recorded.
 
 When it finds a new release, the watcher starts an update and release thread in
 the `t3code-client` project. The thread inherits the Git operator registration
@@ -15,7 +16,9 @@ merge, and publication process. It creates a checkout in the project's
 The most recent launch is recorded in
 `${XDG_STATE_HOME:-$HOME/.local/state}/dagu/t3code-stable-release-watch/last-launch.json`.
 If T3 accepted a launch before Dagu could save it, the next run looks up the
-release thread by title. If work in a release thread fails, resume that thread.
+release thread by title and starts a run there if needed. If work in a release
+thread fails after its run starts, resume that thread. Check Dagu run history
+for polling or dispatch errors. The next scheduled run retries the check.
 
 The watcher reads this workspace's setup from
 `${XDG_CONFIG_HOME:-$HOME/.config}/dagu/t3code-stable-release-watch.json`.

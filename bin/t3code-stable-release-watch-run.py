@@ -9,11 +9,13 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
 UPSTREAM = "https://github.com/pingdotgg/t3code"
-LATEST = "https://api.github.com/repos/pingdotgg/t3code/releases/latest"
+RELEASES_API = "https://api.github.com/repos/pingdotgg/t3code/releases"
+LATEST = f"{RELEASES_API}/latest"
 INITIAL_BASELINE = "v0.1.11"  # This release already had its own update thread at setup.
 ATOM = {"atom": "http://www.w3.org/2005/Atom"}
 STABLE_TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
@@ -30,6 +32,16 @@ def fetch(url):
         return response.read()
 
 
+def published_release(tag):
+    try:
+        release = json.loads(fetch(f"{RELEASES_API}/tags/{tag}"))
+    except HTTPError as error:
+        if error.code == 404:
+            return False
+        raise
+    return release["tag_name"] == tag and not (release["draft"] or release["prerelease"])
+
+
 def newest_release(floor):
     feed = ElementTree.fromstring(fetch(f"{UPSTREAM}/releases.atom"))
     if feed.tag != f"{{{ATOM['atom']}}}feed":
@@ -40,7 +52,9 @@ def newest_release(floor):
     ]
     candidates = [tag for tag in tags if (stable_version(tag) or ()) > floor]
     if candidates:
-        return max(candidates, key=stable_version)
+        tag = max(candidates, key=stable_version)
+        if published_release(tag):
+            return tag
 
     # Nightly and mobile builds can displace all recent stable tags from the feed.
     tag = json.loads(fetch(LATEST))["tag_name"]
@@ -56,21 +70,26 @@ def t3_json(*args, prompt=None):
 
 
 def launch_prompt(tag, project_root, operator, operator_source):
-    return f"""I am a T3 Code agent dispatching the local Dagu release workflow configured in thread {operator_source} for operator {operator}.
+    return f"""The local Dagu release watcher started this thread. Operator {operator} configured it in T3 thread {operator_source}.
 
 Update and release wyrd-company/t3code-client for upstream T3 Code {tag}.
 Upstream release: {UPSTREAM}/releases/tag/{tag}
 
 Use `git operator set --from {operator_source}` to inherit the Git operator registration.
-Work in the t3code-client repo under {project_root}. Read its `main/AGENTS.md` and
-`main/docs/technical-designs/releasing.yml`. Fetch client origin/main and create
-a worktree from `t3code-client.git` under this project's `worktrees/` folder.
-Check for an existing update or release before starting duplicate work.
+Work in the t3code-client repo under {project_root}. Read `main/AGENTS.md`,
+`worktrees/AGENTS.md`, the `tracking-t-code` section of
+`main/docs/technical-designs/releasing.yml`, and the `upstream-updates` section
+of `main/docs/technical-designs/tool-scope.yml`.
+
+Check for an existing update or release before starting duplicate work. Fetch
+client origin/main and create a worktree from `t3code-client.git` under
+`worktrees/`. Verify that `t3@{tag[1:]}` is available on npm before changing the pin.
 
 Follow the repo's T3 Code update procedure, including contract and tool coverage,
-fixtures, live checks, and release intents. Land the update through the repo's
-review and merge process. Then follow the documented Release and Publish process
-and verify publication for the affected units. Surface any gate that requires the operator.
+fixtures, live checks, and release intents. Follow the client's documented merge
+and release approval rules. Once those gates are satisfied, land the update,
+run the documented Release and Publish process, and verify publication for the
+affected units. Keep status, results, and any requests for the operator in this thread.
 """
 
 
@@ -96,13 +115,23 @@ def check(state_dir, project_root, operator, operator_source):
         thread = next((thread for thread in threads if thread["title"] == title), None)
         action = "Found existing"
         if thread is None:
-            thread = t3_json(
+            launch = t3_json(
                 "start", "--title", title, project_root, "-",
                 prompt=launch_prompt(tag, project_root, operator, operator_source),
             )
-            if not thread["runId"]:
-                raise ValueError(f"T3 created thread {thread['threadId']} without a run")
+            thread = launch
             action = "Started"
+        elif not thread["latestRunId"]:
+            launch = t3_json(
+                "send", thread["threadId"], "-",
+                prompt=launch_prompt(tag, project_root, operator, operator_source),
+            )
+            action = "Started run in existing"
+        else:
+            launch = None
+
+        if launch is not None and not launch["runId"]:
+            raise ValueError(f"T3 did not confirm a run for thread {thread['threadId']}")
 
         pending = state.with_suffix(".tmp")
         pending.write_text(json.dumps({"tag": tag, "threadId": thread["threadId"]}) + "\n")
