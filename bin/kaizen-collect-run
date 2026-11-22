@@ -16,11 +16,12 @@ esac
 if repo=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null); then
   branch=$(git -C "$repo" symbolic-ref --quiet --short HEAD || true)
   if [ "$branch" = main ] && [ -z "$(git -C "$repo" status --porcelain)" ]; then
-    git -C "$repo" pull --quiet --ff-only ||
-      echo "kaizen-collect-run: could not update $repo; running $(git -C "$repo" rev-parse --short HEAD)" >&2
+    # A failed update fails the step: old code running every night would go unseen.
+    git -C "$repo" pull --quiet --ff-only || { echo "kaizen-collect-run: could not update $repo" >&2; exit 1; }
   else
     echo "kaizen-collect-run: $repo is not a clean checkout of main; running it as it is" >&2
   fi
+  echo "kaizen-collect-run: running $repo at $(git -C "$repo" rev-parse --short HEAD)" >&2
 fi
 
 if [ ! -f "$dir/collect.py" ]; then
