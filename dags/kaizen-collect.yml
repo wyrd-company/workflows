@@ -1,0 +1,26 @@
+# Collects every finished UTC day of agent exchanges that is not yet collected,
+# from ClickHouse into the Kaizen analysis store and the private archive bucket.
+# No model runs here. The collection code is in the kaizen repository's
+# `collect/` folder; this workflow schedules it. See wiki/kaizen-collect.md.
+description: Collect the finished days of agent exchanges into the Kaizen analysis store
+
+# 01:00 UTC: a day is collected after it ends, with an hour for late rows.
+schedule: "0 1 * * *"
+
+params:
+  # A UTC day (YYYY-MM-DD) to collect again. Empty collects every missing day.
+  - DAY: ""
+
+timeout_sec: 7200
+
+env:
+  # Dagu gives steps only the variables it sets. ClickHouse is reached over SSH
+  # with a key in the Wyrwood agent, and the AWS CLI reads the bucket's key
+  # from OpenBao through the Wyrwood socket.
+  - SSH_AUTH_SOCK: /run/wyrwood/ssh-agent.sock
+  - BAO_ADDR: ${BAO_ADDR}
+
+steps:
+  - name: collect
+    # The script reads DAY from its environment and takes a date and nothing else.
+    run: kaizen-collect-run

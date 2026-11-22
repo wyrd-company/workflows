@@ -1,0 +1,33 @@
+#!/bin/sh
+# Run the kaizen repository's collection: every missing finished day, or the one day in $DAY.
+# Usage: DAY=2026-01-02 kaizen-collect-run
+# KAIZEN_COLLECT_DIR names the folder that holds collect.py (default: the kaizen repository's main checkout).
+set -eu
+dir=${KAIZEN_COLLECT_DIR:-/workspace/kaizen/kaizen/main/collect}
+day=${DAY:-}
+
+# The day comes from a workflow parameter: take a date and nothing else.
+case "$day" in
+  "" | [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+  *) echo "kaizen-collect-run: DAY must be YYYY-MM-DD" >&2; exit 2 ;;
+esac
+
+# Run the merged code: fast-forward a clean checkout of main, and say so when it is anything else.
+if repo=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null); then
+  branch=$(git -C "$repo" symbolic-ref --quiet --short HEAD || true)
+  if [ "$branch" = main ] && [ -z "$(git -C "$repo" status --porcelain)" ]; then
+    git -C "$repo" pull --quiet --ff-only ||
+      echo "kaizen-collect-run: could not update $repo; running $(git -C "$repo" rev-parse --short HEAD)" >&2
+  else
+    echo "kaizen-collect-run: $repo is not a clean checkout of main; running it as it is" >&2
+  fi
+fi
+
+if [ ! -f "$dir/collect.py" ]; then
+  echo "kaizen-collect-run: no collect.py in $dir" >&2
+  exit 1
+fi
+if [ -n "$day" ]; then
+  exec uv run --quiet --with duckdb python -I "$dir/collect.py" run --day "$day"
+fi
+exec uv run --quiet --with duckdb python -I "$dir/collect.py" run
